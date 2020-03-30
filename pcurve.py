@@ -114,10 +114,10 @@ def clip(f, N=None, freezeends=False, exe=None, procs=1, interval=None):
         it += 1
         maxclip = 0.0
         f0 = f.copy()
-        for i in range(1,f.shape[0]-1,1):
+        for i in range(1,f.shape[0]-1,2):
             a = euc(f[i-1],f[i ])
             b = euc(f[i+1],f[i ])
-            if(a == 0.0):
+            if(a == 0.0 or b == 0.0):
                 continue
             p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
             maxclip = max(maxclip, p)
@@ -127,8 +127,24 @@ def clip(f, N=None, freezeends=False, exe=None, procs=1, interval=None):
                 f0[i] = (f[i-1] + f[i+1]) / 2.0
                 clipped = True
         f = f0.copy()
-        if True and maxclip > 0.0:
-            print("clip:", it, "max: ", maxclip)
+        for i in range(2,f.shape[0]-1,1):
+            a = euc(f[i-1],f[i ])
+            b = euc(f[i+1],f[i ])
+            if(a == 0.0 or b == 0.0):
+                continue
+            p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
+            maxclip = max(maxclip, p)
+            #if(p < a or  euc(f[i+1],f[i ]) < a):
+            # 
+            if(p > np.cos(np.pi*.99) ):
+                f0[i] = (f[i-1] + f[i+1]) / 2.0
+                clipped = True
+        f = f0.copy()
+        #if True and maxclip > 0.0:
+        #print("clip: {:d} {:20.15e}".format(it, maxclip))
+        if maxclip == 0.0:
+            break
+    print("clip: {:d} {:20.15e}".format(it, maxclip))
 
     #targetL = curveEuc(f, 0, f.shape[0])
     #p = rescale(f, N=None, targetL=targetL, 
