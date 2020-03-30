@@ -22,50 +22,54 @@ cdef double cabs(double x) nogil:
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef double euc(
-        double[3] X,
-        double[3] Y) nogil:
+        double[:] X,
+        double[:] Y,
+        int n_dims) nogil:
 
 #    cdef int n_dims
-    cdef double tmp, d
-    cdef cnp.intp_t j
+    cdef double tmp
+    cdef int j
 
-#    n_dims = 3
-    d = 0
+#   # n_dims = 3
+    d = 0.0
 
-    for j in range(3):
+    for j in range( n_dims):
         tmp = X[j] - Y[j]
+        #printf("j=%d tmp is %f\n", j, tmp)
         d += tmp * tmp
-
+    #printf("d is %f\n", d)
     return sqrt(d)
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 cdef void projectionIDX(
         double[:,::1] f, 
-        double[:,::1] X, 
+        double[:,::1] X,
+        double[::1] x,
+        double[::1] prevF,
+        double[::1] curF,
+        int n_dims,
         cnp.intp_t ID,
         const double eps, 
         double[:] ret) nogil:
     
-    cdef cnp.intp_t i,j, n_pts, n_dims
-    cdef double L, minL, l, p, d
+    cdef cnp.intp_t i,j, n_pts 
+    cdef double L, minL, l, p, d, z
     cdef double minD, dl
     cdef float IDf = ID
-    n_dims = 3 #f.shape[1]
     cdef double delta = 0.0
-    cdef double[3] x
-    cdef double[3] prevF, curF
-    cdef double[3] fnew
+
     
     n_pts = f.shape[0]
     for i in range(n_dims):
         ret[3+i] = f[0][i]
         curF[i] = f[0][i]
         x[i] = X[ID][i]
+        prevF[i] = 0.0
     L = 0.0 
     minL = 0.0
     l = 0.0
-    minD = euc(x,curF)
+    minD = euc(x,curF,n_dims)
     d = 0.0
     
     ret[0] = ID
@@ -80,25 +84,29 @@ cdef void projectionIDX(
         dl = 0.0
         p = 0.0
 
-        l = euc(prevF,curF)
+        l = euc(prevF,curF,n_dims)
+        #printf("j=%d tmp is %f\n", j, l)
         if(l == 0.0):
             continue
         
         for i in range(n_dims):
             p += (x[i] - prevF[i]) * ((curF[i] - prevF[i]) /l) 
-        if(p <= 0.0):
-            d = euc(x,prevF)
-            dl = 0.0
-        else:
+        dl = 0.0
+        if(p == 0.0):
+            d = euc(x,prevF,n_dims)
+        elif p > 0.0:
             # pythag to find the distance to proj point
             dl = p
             if(p < l):
-                z = euc(x,prevF)
+                z = euc(x,prevF,n_dims)
                 d = z*z - p*p
                 d = sqrt(d)
             else:
-                d = euc(x,curF)
-        if(d < minD):# and cabs(d-minD) > eps):
+                d = euc(x,curF,n_dims)
+        elif j > 1:
+            L += l
+            continue
+        if(d < minD) and cabs(d-minD) > eps:
             minD = d
             minL = (L + dl)
             if(p <= 0.0):
@@ -114,6 +122,7 @@ cdef void projectionIDX(
         L += l
     ret[1] = minL
     ret[2] = L
+    #printf("ret %f %f %f", ret[0], ret[1], ret[2])
     return
 
 
@@ -127,20 +136,26 @@ def start(f,X,ID,chunk,eps):
     cdef int cID = ID
     cdef int C
     cdef int c
+    cdef int n_dims
     cdef double ceps = eps 
     cdef n_samples = X.shape[0]
-    cdef double L, minL, l, p, d
+    cdef double L, minL, l, p
     cdef float IDf 
     if(ID + chunk >= n_samples):
         chunk = n_samples - ID
     C = chunk
     IDf = (ID + chunk + 1)/n_samples*100.0
-    ret = np.ones((chunk,6),np.float64)
+    n_dims= f.shape[1]
+    ret = np.ones((chunk,3+n_dims),np.float64)
     cdef double[:,:] cret = ret
+    cdef double[::1] x     = np.zeros(n_dims)
+    cdef double[::1] cbuf1 = np.zeros(n_dims)
+    cdef double[::1] cbuf2 = np.zeros(n_dims)
     with nogil:
         for c in range(C):
-            projectionIDX(cf,cX,cID+c,ceps,cret[c])
-#            printf("%f %f %f\n", cret[c][3],cret[c][4],cret[c][5])
+            projectionIDX(cf,cX,x,cbuf1,cbuf2,n_dims,cID+c,ceps,cret[c])
+            #printf("%f %f %f\n", cret[c][0],cret[c][1],cret[c][2])
+            #printf("%f %f %f\n", cret[c][3],cret[c][4],cret[c][5])
 #        printf("\rProject     %10d % 7.3f %%      ", cID + c+ 1, IDf)
             
 #    print("\r" + "Project     {:10d} {: 7.3f} %      ".format(
@@ -163,7 +178,7 @@ cpdef startOMP(double[:,::1] f, double[:,::1] X, double[:,::1] Xf):
     with nogil,cpar.parallel(num_threads=24):
         tid = cpar.threadid()
         for ID in range(tid,N,24):
-            projectionIDX(f,X,ID,ceps,cret)
+            #projectionIDX(f,X,ID,ceps,cret)
             for j in range(6):
                 Xf[ID][j] = cret[j]
 #    for ID in cpar.prange(N,nogil=True):

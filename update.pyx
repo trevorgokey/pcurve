@@ -104,6 +104,7 @@ cdef void update_curve(
         double     maxstep, 
         double[:] ret) nogil:
     cdef double tfshape = tf.shape[0]
+    cdef int n_dims = f.shape[1]
     cdef int keep = (int)(tfshape*w)
     if(keep < 1):
         keep = 1
@@ -126,15 +127,13 @@ cdef void update_curve(
     cdef cnp.intp_t mini = i
     cdef cnp.intp_t maxi = i
     cdef cnp.intp_t ji
-    cdef double L = 0
+    cdef double L = 0.0
     cdef double norm = 0.0
     cdef double weight = 0.0
     cdef double step = 0.0
     cdef cnp.intp_t jj = j
+    ret[:] = 0.0
     ret[0] = j
-    ret[1] = 0.0
-    ret[2] = 0.0
-    ret[3] = 0.0
     cdef double reft = tp[j]
     # need to set j to the closest index tf to tp[j]
     # binary search to find closest index
@@ -161,11 +160,13 @@ cdef void update_curve(
         ji = j + i
         l = cabs(reft - tf[ji])
         L = 0.0
+        #printf("l is %f\n", l)
         if(l > 0.0):
             if (i >= 0):
                 if(kept >= keep):
                     right = True
                     i = -i - 1
+                    #printf("j=%d right=True\n", jj)
                     continue
                 dr += l
                 L = dr
@@ -173,12 +174,15 @@ cdef void update_curve(
                 if(kept >= keep):
                     left = True
                     i = -i
+                    #printf("j=%d left=True\n", jj)
                     continue
                 dl += l
                 L = dl
+            #printf("j=%d dl=%f dr=%f L=%f\n",jj,dl,dr,L)
         D = cfmax(L,D)
         kept += 1
         nbl.push_back(L)
+        #printf("j=%d pushed %f, D=%f\n", jj, L, D)
         
         mini = cimin(mini,i)
         maxi = cimax(maxi,i)
@@ -200,6 +204,7 @@ cdef void update_curve(
                 i = -i - 1
             else:
                 i = -i
+    #printf("j=%d D= %f\n",jj,D)
     
     if(D > 0.0):
         for i in range(j+mini,j+maxi+1):
@@ -207,6 +212,7 @@ cdef void update_curve(
             weight = 1.0 - weight * weight * weight
             weight = weight * weight * weight
             weight = weight * E[i]
+            #printf("j=%d i=%d E= %f weight= %f\n", jj, i, E[i], weight)
             nbl[i-(j+mini)] = weight
     else:
         # All points collected project exactly on this point -> regular average
@@ -222,12 +228,15 @@ cdef void update_curve(
     argsort(nbl, order, nbl.size())
     for i in range(nbl.size()):
         norm += nbl[order[i]]
+    #printf("j=%d NORM= %f\n",jj,norm)
 
     
     for i in range(nbl.size()):
-        for k in range(3):
+        for k in range(n_dims):
             ret[k+1] += (X[j+mini + order[i]][k] * nbl[order[i]])/norm
+            #printf("j=%d k=%d adding= %f\n",jj, k, (X[j+mini + order[i]][k] * nbl[order[i]])/norm)
     free(order)
+    #printf("j=%d NPT= %f %f %f\n",jj,ret[1], ret[2], ret[3])
     
     #for i in range(nbl.size()):
     #    norm += nbl[i]
@@ -238,15 +247,16 @@ cdef void update_curve(
 
     step = 0.0
     norm = 0.0
-    for k in range(3):
-        step = (ret[k+1] - p[jj][k])
+    for k in range(n_dims):
+        step = (ret[k+1] - p[jj][k]) # changed p to f
         norm += step * step
-    norm = sqrt(norm) ## this is the distance between pts
-    if(scale*norm > maxstep):
+    norm = scale*sqrt(norm) ## this is the distance between pts
+    if(norm > maxstep):
         scale = maxstep/norm
 #    scale *= scale
-    for k in range(3):
+    for k in range(n_dims):
         ret[k+1] = p[jj][k] + scale*(ret[k+1] - p[jj][k])
+    #printf("j=%d PT= %f %f %f\n",jj,ret[1], ret[2], ret[3])
 
 #@cython.boundscheck(False)
 #@cython.wraparound(False)
@@ -383,6 +393,7 @@ def start(tf,f,X,E, double [::1] tp, double[:,::1] p,w,ID,scale=1.0,maxstep=1.0,
     cdef int cID = ID
     cdef int C
     cdef int c
+    cdef int n_dims
     cdef double cw = w
     cdef double cmaxstep = maxstep
     cdef double cscale = scale
@@ -396,7 +407,8 @@ def start(tf,f,X,E, double [::1] tp, double[:,::1] p,w,ID,scale=1.0,maxstep=1.0,
     else:
         IDf = (ID + chunk + 1)/n_samples*100.0
     
-    ret = np.zeros((chunk,4),np.float64)
+    n_dims = X.shape[1]
+    ret = np.zeros((chunk,n_dims+1),np.float64)
     cdef double[:,:] cret = ret
     
     with nogil:
