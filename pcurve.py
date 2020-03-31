@@ -109,42 +109,49 @@ def clip(f, N=None, freezeends=False, exe=None, procs=1, interval=None):
     start=1
     end=f.shape[0]-2
     maxclip = 0.0
+    quick = False
+    dx = 1
+    costheta = np.cos(np.pi*3/4)
+    if quick:
+        dx = 2
     while(clipped == True and it < 10000):
         clipped = False
         it += 1
         maxclip = 0.0
         f0 = f.copy()
-        for i in range(1,f.shape[0]-1,2):
+        for i in range(1,f.shape[0]-1,dx):
             a = euc(f[i-1],f[i ])
             b = euc(f[i+1],f[i ])
             if(a == 0.0 or b == 0.0):
                 continue
             p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
-            maxclip = max(maxclip, p)
             #if(p < a or  euc(f[i+1],f[i ]) < a):
             # 
-            if(p > np.cos(np.pi*.99) ):
+            if(p > costheta ):
+                maxclip = max(maxclip, abs(p))
                 f0[i] = (f[i-1] + f[i+1]) / 2.0
                 clipped = True
         f = f0.copy()
-        for i in range(2,f.shape[0]-1,1):
-            a = euc(f[i-1],f[i ])
-            b = euc(f[i+1],f[i ])
-            if(a == 0.0 or b == 0.0):
-                continue
-            p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
-            maxclip = max(maxclip, p)
-            #if(p < a or  euc(f[i+1],f[i ]) < a):
-            # 
-            if(p > np.cos(np.pi*.99) ):
-                f0[i] = (f[i-1] + f[i+1]) / 2.0
-                clipped = True
-        f = f0.copy()
-        #if True and maxclip > 0.0:
-        #print("clip: {:d} {:20.15e}".format(it, maxclip))
+        if quick:
+            for i in range(2,f.shape[0]-1,2):
+                a = euc(f[i-1],f[i ])
+                b = euc(f[i+1],f[i ])
+                if(a == 0.0 or b == 0.0):
+                    continue
+                p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
+                #if(p < a or  euc(f[i+1],f[i ]) < a):
+                # 
+                if(p > costheta ):
+                    maxclip = max(maxclip, abs(p))
+                    f0[i] = (f[i-1] + f[i+1]) / 2.0
+                    clipped = True
+            f = f0.copy()
+        if True and maxclip > 0.0:
+            print("clip: {:d} {:20.15e}".format(it, maxclip), end="\r")
         if maxclip == 0.0:
             break
-    print("clip: {:d} {:20.15e}".format(it, maxclip))
+    print()
+    #print("clip: {:d} {:20.15e}".format(it, maxclip), end="\r")
 
     #targetL = curveEuc(f, 0, f.shape[0])
     #p = rescale(f, N=None, targetL=targetL, 
@@ -197,7 +204,7 @@ def update(tf, f, X, E, tp, p, w, exe=None, procs=1, scale=1.0, maxstep=1.0, tar
         p[0] = ptA
         p[-1] = ptB
 
-    #return p
+    return p
     return clip(p, freezeends=freezeends)
 
 def project( f0, X, exe=None, procs=1, eps=1e-14):
@@ -288,7 +295,7 @@ def projectionIDX(f,X,ID,eps=1e-14):
     
     print("\r" + "Project     {:10d} {: 7.3f} %      ".format(ID,float(ID)/X.shape[0]*100),end="")
     Xf = np.concatenate(([ID,minL,L],fnew))
-    print("ret ", ID, minL, L)
+    #print("ret ", ID, minL, L)
     return Xf
 
 
@@ -574,7 +581,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     eps=0.0005,eps_ene=.001,N=[100],W=[.1],init=None,checkpoint=None,
     scale_list=[1.0],maxstep=1.0,mbar=(-1,-1),
     freezeends=False,freezerange=None,interval=.1,
-    FORCE_SWITCH=0,use_ene_indices=[],adaptive=True):
+    FORCE_SWITCH=0,use_ene_indices=[],adaptive=False,savechk=False):
     """
         X is the dataset positions (Nx3)
         I is the membership of each pt in X to C (Nx1; values are [0,K))
@@ -622,7 +629,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             print("C not finite! rows:")
             print(np.arange(C.shape[0])[~np.isfinite(C).any(axis=1)])
             return
-        T = np.vstack((X,C)).mean(axis=0)
+        #T = np.vstack((X,C)).mean(axis=0)
+        T = X.mean(axis=0)
         ORDER = np.arange(X.shape[0])
         ORDERC = np.arange(C.shape[0])
         X = X - T.T
@@ -635,16 +643,17 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         if(init is None):
             #initalize f as first eigenval
             # fe is dx1
-            fe = PCA(n_components=1).fit(np.vstack((X,C))).components_[0].reshape(-1,1)
+            #fe = PCA(n_components=1).fit(np.vstack((X,C))).components_[0].reshape(-1,1)
+            fe = PCA(n_components=1).fit(X).components_[0].reshape(-1,1)
             # project is Nx1
             projection = np.dot(X,fe).reshape(-1,1)
             #projection = np.linspace(projection.min(),projection.max(),X.shape[0]).reshape(-1,1)
             prjC = np.dot(C,fe).reshape(-1,1)
             f = [np.dot(projection,fe.T),None]
-            if(f[0][0][2] < 0.0):
-                f[0] = f[0][::-1]
-                projection = projection[::-1]
-                fe = -fe
+            #if(f[0][0][-1] < 0.0):
+            #    f[0] = f[0][::-1]
+            #    projection = projection[::-1]
+            #    fe = -fe
             if(freezeends and freezerange is not None):
                 if(isinstance(freezerange, list)):
                     prA = freezerange[0]#/fe[2]
@@ -678,8 +687,10 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             F = [np.zeros_like(K),np.zeros_like(K)]
         X = X + T.T
         C = C + T.T
-        f[0] -= f[0].mean(axis=0) - T.T
-        fC[0] -= fC[0].mean(axis=0) - T.T 
+        f[0] += T.T
+        fC[0] += T.T 
+        #f[0] -= f[0].mean(axis=0) - T.T
+        #fC[0] -= fC[0].mean(axis=0) - T.T 
         if U is None:
             U = np.zeros(X.shape[0])
 
@@ -810,6 +821,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     firstbad = True
     rmsd[:] = -1.0
     needmbar = mbar[0] > 0 or mbar[1] >= 0
+    bestp = p.copy()
+    besttp = tp.copy()
     for w,n,scale in zip(W,N,scale_list):
         if(not (w > 0.0 and w < 1.0)):
             print("ERROR: span =",w,"is not acceptable")
@@ -836,10 +849,13 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             rms[1] = stats(X,    f[0], w=ene[0])
             rms[2] = delta(rms)
             if(rms[1][0] < bestrms[0]):
+            #if(False):
                 bestrms[0] = rms[1][0]
                 bestrms[1] = rms[1][1]
                 bestrms[2] = rms[1][2]
                 bestf = f[0].copy()
+                bestp = f[0].copy()
+                besttp = tf[0].copy()
                 bestF = F[0].copy()
                 besttf = tf[0].copy()
                 bestene = ene[0].copy()
@@ -852,11 +868,13 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                 bestC = C.copy()
                 besttfC = tfC[0].copy()
             L = curveEuc(f[0],0,f[0].shape[0])
-            np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I, E=ene[0], F=F[0],
-                    tf=tf[0], f=f[0], tfC=tfC[0], fC=fC[0],
-                    W=W,N=N,L=L,ii=ii-1,scale_list=scale_list,p=p,tp=tp,
-                    use_ene_indices=use_ene_indices) 
-            rms = rotate(rms)
+            if(savechk):
+                np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I, E=ene[0], F=F[0],
+                        tf=tf[0], f=f[0], tfC=tfC[0], fC=fC[0],
+                        W=W,N=N,L=L,ii=ii-1,scale_list=scale_list,p=p,tp=tp,
+                        use_ene_indices=use_ene_indices) 
+            if True:
+                rms = rotate(rms)
         winner = '!'
         print("\rSpan {: 5.2f} Step {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2f} L {: 10.8e}".format(
             w*100.,ii, winner, scale, maxstep, L) ,end="\n")
@@ -866,6 +884,10 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         jj = 0
         bestjj = 0
         for i in range(n):
+            if i == 0:
+                adaptive = False
+            else:
+                adaptive = True
             #infoprint("\rSaving new iteration...               ",end="")
             #L = curveEuc(f[0],0,f[0].shape[0])
             #ret = np.insert(f[0],0,tf[0],axis=1)
@@ -1005,6 +1027,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             #infoprint("\n" + str(rms))
             ii += 1
             savexyz(p,progress_fname)
+            savexyz(p,'p.xyz')
             #savexyz(X,"data.xyz")
             savexyz(f[1],"f.xyz")
             doswap = False
@@ -1020,31 +1043,32 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                 drop_found = False
                 jj = 0
                 if(conv_ene):
-                    try:
-                        os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
-                    except FileNotFoundError:
-                        pass
-                    try:
-                        np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
-                                E=ene[1], U=U, F=F[1],
-                                tf=tf[1], f=f[1], tfC=tfC[0], fC=fC[0],
-                                W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
-                                mbar_pickle=pickle.dumps(MBAR),
-                                FORCE_SWITCH=FORCE_SWITCH,
-                                use_ene_indices=use_ene_indices)
-                    except MemoryError:
-                        print("MemoryError! Saving mbar data into separate file")
-                        with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
-                                'wb') as pfile:
-                            pickle.dump(MBAR, pfile)
-                        if(os.path.exists(checkpoint)):
-                            os.remove(checkpoint)
-                        np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
-                                E=ene[1], U=U, F=F[1],
-                                tf=tf[1], f=f[1], tfC=tfC[0], fC=fC[0],
-                                W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
-                                FORCE_SWITCH=FORCE_SWITCH,
-                                use_ene_indices=use_ene_indices)
+                    if savechk:
+                        try:
+                            os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                    E=ene[1], U=U, F=F[1],
+                                    tf=tf[1], f=f[1], tfC=tfC[0], fC=fC[0],
+                                    W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                    mbar_pickle=pickle.dumps(MBAR),
+                                    FORCE_SWITCH=FORCE_SWITCH,
+                                    use_ene_indices=use_ene_indices)
+                        except MemoryError:
+                            print("MemoryError! Saving mbar data into separate file")
+                            with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
+                                    'wb') as pfile:
+                                pickle.dump(MBAR, pfile)
+                            if(os.path.exists(checkpoint)):
+                                os.remove(checkpoint)
+                            np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                    E=ene[1], U=U, F=F[1],
+                                    tf=tf[1], f=f[1], tfC=tfC[0], fC=fC[0],
+                                    W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                    FORCE_SWITCH=FORCE_SWITCH,
+                                    use_ene_indices=use_ene_indices)
                     rmsd[ii%memory] = np.abs(rms[2][0])
                     if(np.abs(rms[2][0]) < eps):
                         converged = True
@@ -1075,7 +1099,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                 bestrms = [np.inf,np.inf,np.inf]
                 bestpth = [np.inf,np.inf,np.inf]
                 bestfre = [np.inf,np.inf,np.inf] 
-            elif(rms[2][0] >= 0):
+            elif( adaptive and rms[2][0] >= 0):
                 #print("Case 1: raised target")
                 # we increased, so reduce the scale
                 winner = 'X'
@@ -1107,15 +1131,15 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                         else:
                             conv_ene = False
                             force_mbar = True
-            if(adaptive and ((not dombar) and (rms[2][0] < 0 or (deadend and drop_found)))):
-                if(rms[2][0] < 0):
+            if((not adaptive) or ((not dombar) and (rms[2][0] < 0 or (deadend and drop_found)))):
+                if((not adaptive) or rms[2][0] < 0):
                     scalelow = scale
                     scale = scale + (scalehigh - scalelow)/2.0
                     drop_found = True
                     deadend = False
                     winner = '-'
 
-                    if(adaptive or (rms[1][0] < bestrms[0])):
+                    if((not adaptive) or (rms[1][0] < bestrms[0])):
                         winner = '+'
                         #  this is the best point on the search, keep it.
                         bestjj = jj
@@ -1136,8 +1160,10 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                         bestC = C.copy()
                         besttfC = tfC[1].copy()
                         bestL = L
+                        #print("SAVED")
+                        #savexyz(p,"p.xyz",mode='w')
                     
-                if( ((not deadend) or (not drop_found)) and
+                if(adaptive and ((not deadend) or (not drop_found)) and
                     abs(scalehigh - scale) >= scalelow_param):
                     # we found a low point, and can increase the scale to
                     # perhaps find a larger displacement
@@ -1192,31 +1218,36 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                     winner = 'Y'
                     if(mbar[1] == 0):
                         needmbar = True
+                    #print("SAVED")
                     savexyz(p,"best.xyz",mode='a')
-                    try:
-                        os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
-                    except FileNotFoundError:
-                        pass
-                    try:
-                        np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
-                                E=ene[1], U=U, F=F[1],
-                                tf=tf[1], f=f[1], tfC=tfC[1], fC=fC[1],
-                                W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
-                                mbar_pickle=pickle.dumps(MBAR),
-                                FORCE_SWITCH=FORCE_SWITCH,
-                                use_ene_indices=use_ene_indices)
-                    except MemoryError:
-                        with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
-                                'wb') as pfile:
-                            pickle.dump(MBAR, pfile)
-                        if(os.path.exists(checkpoint)):
-                            os.remove(checkpoint)
-                        np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
-                                E=ene[1], U=U, F=F[1],
-                                tf=tf[1], f=f[1], tfC=tfC[1], fC=fC[1],
-                                W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
-                                FORCE_SWITCH=FORCE_SWITCH,
-                                use_ene_indices=use_ene_indices)
+                    savexyz(p,"p.xyz",mode='w')
+                    if(savechk):
+                        try:
+                            os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
+                        except FileNotFoundError:
+                            pass
+                        try:
+                            np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                    E=ene[1], U=U, F=F[1],
+                                    tf=tf[1], f=f[1], tfC=tfC[1], fC=fC[1],
+                                    W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                    mbar_pickle=pickle.dumps(MBAR),
+                                    FORCE_SWITCH=FORCE_SWITCH,
+                                    use_ene_indices=use_ene_indices)
+                        except MemoryError:
+                            with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
+                                    'wb') as pfile:
+                                pickle.dump(MBAR, pfile)
+                            if(os.path.exists(checkpoint)):
+                                os.remove(checkpoint)
+                            np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                    E=ene[1], U=U, F=F[1],
+                                    tf=tf[1], f=f[1], tfC=tfC[1], fC=fC[1],
+                                    W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                    FORCE_SWITCH=FORCE_SWITCH,
+                                    use_ene_indices=use_ene_indices)
+                        except RecursionError:
+                            print("RECURSION ERROR")
                     
                     #pathmem[memory_idx % memory][:] = p
                     #pathmem_N += 1
@@ -1294,10 +1325,18 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         
     print("Best fit found using span =",beststep[0],"on step",beststep[1],", RMSD =",beststep[2])
     print("Total elapsed: " + str(timedelta(seconds=tm-tottime)))
+    s = np.argsort(besttp)
+    bestp = bestp[s]
+    X = X[s]
+    #bestp = clip(bestp)
+    tf ,f,L = project(bestp, X, exe=executor, procs=procs, eps=1e-14)
     if(executor is not None):
         executor.close()
         executor.join()
-    return
+    return tf, f, X
+    return tf[1][ORDER], f[1][ORDER],X[ORDER]
+    return besttf[bestorder], bestf[bestorder],X[bestorder]
+    #return besttf[ORDER], bestf[ORDER], X[ORDER]
 
 def curveLen(f):
     L = 0.0
