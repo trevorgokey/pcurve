@@ -19,7 +19,9 @@ def savexyz(X,filename,mode='a',atom="C"):
         f.flush()
         f.close()
 
-def infoprint(s,end="\n"):
+def infoprint(s,end="\n", quiet=False):
+    if quiet:
+        return
     if(VERBOSE):
         print(s,end=end)
 
@@ -109,9 +111,9 @@ def clip(f, N=None, freezeends=False, exe=None, procs=1, interval=None):
     start=1
     end=f.shape[0]-2
     maxclip = 0.0
-    quick = False
+    quick = True
     dx = 1
-    costheta = np.cos(np.pi*3/4)
+    costheta = np.cos(np.pi*7/8)
     if quick:
         dx = 2
     while(clipped == True and it < 10000):
@@ -146,11 +148,12 @@ def clip(f, N=None, freezeends=False, exe=None, procs=1, interval=None):
                     f0[i] = (f[i-1] + f[i+1]) / 2.0
                     clipped = True
             f = f0.copy()
-        if True and maxclip > 0.0:
+        if VERBOSE and maxclip > 0.0:
             print("clip: {:d} {:20.15e}".format(it, maxclip), end="\r")
         if maxclip == 0.0:
             break
-    print()
+    if VERBOSE:
+        print()
     #print("clip: {:d} {:20.15e}".format(it, maxclip), end="\r")
 
     #targetL = curveEuc(f, 0, f.shape[0])
@@ -204,7 +207,7 @@ def update(tf, f, X, E, tp, p, w, exe=None, procs=1, scale=1.0, maxstep=1.0, tar
         p[0] = ptA
         p[-1] = ptB
 
-    return p
+    #return p
     return clip(p, freezeends=freezeends)
 
 def project( f0, X, exe=None, procs=1, eps=1e-14):
@@ -581,7 +584,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     eps=0.0005,eps_ene=.001,N=[100],W=[.1],init=None,checkpoint=None,
     scale_list=[1.0],maxstep=1.0,mbar=(-1,-1),
     freezeends=False,freezerange=None,interval=.1,
-    FORCE_SWITCH=0,use_ene_indices=[],adaptive=False,savechk=False):
+    FORCE_SWITCH=0,use_ene_indices=[],adaptive=False,savechk=False, quiet=False):
     """
         X is the dataset positions (Nx3)
         I is the membership of each pt in X to C (Nx1; values are [0,K))
@@ -597,7 +600,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     calc_init = True
     
     if(checkpoint and os.path.exists(checkpoint)):
-        print("Loading checkpoint from",checkpoint)
+        if VERBOSE and not quiet:
+            print("Loading checkpoint from",checkpoint)
         chk = np.load(checkpoint)
         X = chk['X']
         I = chk['I']
@@ -715,7 +719,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         executor = Pool(processes=procs)
     tm = time.time()
     tottime = time.time()
-    print("Step = ",N,"D = ",X.shape[0],"K = ",I.max()+1, "eps = ",eps,"Procs = ",procs, "Force =", FORCE_SWITCH)
+    if not quiet:
+        print("Step = ",N,"D = ",X.shape[0],"K = ",I.max()+1, "eps = ",eps,"Procs = ",procs, "Force =", FORCE_SWITCH)
     bestf = None
     besttf = None
     mindelta = np.inf
@@ -823,6 +828,9 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     needmbar = mbar[0] > 0 or mbar[1] >= 0
     bestp = p.copy()
     besttp = tp.copy()
+    savej = 0
+    np.savez("chk."+str(savej)+".npz", tf=tf[0], f=f[0], X=X, p=bestp)
+    savej = 1
     for w,n,scale in zip(W,N,scale_list):
         if(not (w > 0.0 and w < 1.0)):
             print("ERROR: span =",w,"is not acceptable")
@@ -841,7 +849,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         if(calc_init):
             needmbar = mbar[0] > 0 or mbar[1] >= 0
             calc_init = False
-            infoprint("\rCalculating RMS...              ",end="\n")
+            infoprint("\rCalculating RMS...              ",end="\n", quiet=quiet)
             bestrms = [np.inf,np.inf,np.inf]
             rms = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]] # mean, min, max for step cur,prev. last is delta
             pth = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
@@ -876,13 +884,15 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             if True:
                 rms = rotate(rms)
         winner = '!'
-        print("\rSpan {: 5.2f} Step {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2f} L {: 10.8e}".format(
-            w*100.,ii, winner, scale, maxstep, L) ,end="\n")
-        printinfoline("RMS",rms)
-        print()
-        sys.stdout.flush()
+        if not quiet:
+            print("\rSpan {: 5.2f} Step {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2f} L {: 10.8e}".format(
+                w*100.,ii, winner, scale, maxstep, L) ,end="\n")
+            printinfoline("RMS",rms)
+            print()
+            sys.stdout.flush()
         jj = 0
         bestjj = 0
+        savej = 1
         for i in range(n):
             if i == 0:
                 adaptive = False
@@ -899,7 +909,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             # np.savez("progress.npz",**out)
 #            savexyz(p,"progress_"+str(ii) + ".xyz",mode='w')
             
-            infoprint("\rProjecting...               ",end="")
+            infoprint("\rProjecting...               ",end="", quiet=quiet)
             tf[1],f[1],L = project(p, X, exe=executor, procs=procs, eps=1e-14)
             
             X0 = X.copy()
@@ -941,7 +951,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             if(dombar):
                 needmbar = False
                 force_mbar = False
-                infoprint("\rMBAR estimation of energies...        ",end="")
+                infoprint("\rMBAR estimation of energies...        ",end="", quiet=quiet)
                 _U = None
                 if(len(use_ene_indices) == 0):
                     _U = np.zeros_like(tf[0])
@@ -984,7 +994,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             scale_used = scale
             # tf has the modified projections on the line, compared to p
             # now need to move p
-            infoprint("\rUpdating curve..       ",end="")
+            infoprint("\rUpdating curve..       ",end="", quiet=quiet)
             p      = update(tf[1], f[1], X, (ene[1]),tp,p,w,
                             scale=scale, maxstep=maxstep, targetL=L,
                             freezeends=freezeends, exe=executor, procs=procs)
@@ -1006,7 +1016,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                 f[1] = f[1][idx]
 
             # done! check if we are stationary and get timing
-            infoprint("\rPreparing next step...              ",end="")
+            infoprint("\rPreparing next step...              ",end="", quiet=quiet)
             
     
             # timing
@@ -1057,7 +1067,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                                     FORCE_SWITCH=FORCE_SWITCH,
                                     use_ene_indices=use_ene_indices)
                         except MemoryError:
-                            print("MemoryError! Saving mbar data into separate file")
+                            if VERBOSE:
+                                print("MemoryError! Saving mbar data into separate file")
                             with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
                                     'wb') as pfile:
                                 pickle.dump(MBAR, pfile)
@@ -1188,7 +1199,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                     #+ path
                     # print("Case 3: lowered target and nowhere to wiggle." +
                     #    " Best jj is", bestjj)
-                    infoprint("\rSaving new best iteration...            ",end="\r")
+                    infoprint("\rSaving new best iteration...            ",end="\r", quiet=quiet)
 
                     scalelow = scalelow_param
                     scalehigh = scalehigh_param
@@ -1221,6 +1232,16 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                     #print("SAVED")
                     savexyz(p,"best.xyz",mode='a')
                     savexyz(p,"p.xyz",mode='w')
+
+                    s = np.argsort(besttp)
+                    bestp2 = bestp[s]
+                    Xcopy = X.copy()[s]
+                    tf2 ,f2,L2 = project(bestp2, Xcopy, exe=executor, procs=procs, eps=1e-14)
+
+                    np.savez("chk."+str(savej)+".npz", tf=tf2, f=f2, X=Xcopy, p=bestp2)
+                    savej += 1
+                    Xcopy = None
+
                     if(savechk):
                         try:
                             os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
@@ -1247,7 +1268,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                                     FORCE_SWITCH=FORCE_SWITCH,
                                     use_ene_indices=use_ene_indices)
                         except RecursionError:
-                            print("RECURSION ERROR")
+                            if not quiet:
+                                print("RECURSION ERROR")
                     
                     #pathmem[memory_idx % memory][:] = p
                     #pathmem_N += 1
@@ -1276,14 +1298,15 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             #print(rms)
             # 
             if(converged):
-                print("\rSpan {: 5.2f} Step {:4d} Search {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2e} L {: 10.8e} Time {:16s} {:s}".format(
-                            w*100.,ii, jj, winner, scale_used, maxstep, L, timestr, 
-                            "**** CONVERGED") ,end="\n")
-                printinfoline("RMS", rms)
-                printinfoline("PTH", pth)
-                printinfoline("ENE*" if ene_updated else "ENE", fre)
-                print()
-                sys.stdout.flush()
+                if not quiet:
+                    print("\rSpan {: 5.2f} Step {:4d} Search {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2e} L {: 10.8e} Time {:16s} {:s}".format(
+                                w*100.,ii, jj, winner, scale_used, maxstep, L, timestr, 
+                                "**** CONVERGED") ,end="\n")
+                    printinfoline("RMS", rms)
+                    printinfoline("PTH", pth)
+                    printinfoline("ENE*" if ene_updated else "ENE", fre)
+                    print()
+                    sys.stdout.flush()
                 rmsd[:] = -1.0
                 pathmem_N = 0
                 if(conv_ene):
@@ -1292,24 +1315,26 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
                 bestpth = [np.inf,np.inf,np.inf]
                 bestfre = [np.inf,np.inf,np.inf] 
             else:
-                print("\rSpan {: 5.2f} Step {:4d} Search {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2e} L {: 10.8e} Time {:16s}".format(
-                            w*100.,ii, jj, winner, scale_used, maxstep, L, timestr) ,end="\n")
-                printinfoline("RMS", rms)
-                printinfoline("PTH", pth)
-                printinfoline("ENE*" if ene_updated else "ENE", fre)
-                print()
-                sys.stdout.flush()
+                if not quiet:
+                    print("\rSpan {: 5.2f} Step {:4d} Search {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2e} L {: 10.8e} Time {:16s}".format(
+                                w*100.,ii, jj, winner, scale_used, maxstep, L, timestr) ,end="\n")
+                    printinfoline("RMS", rms)
+                    printinfoline("PTH", pth)
+                    printinfoline("ENE*" if ene_updated else "ENE", fre)
+                    print()
+                    sys.stdout.flush()
 
             # rotate data to start new iter
             dombar = False
-            if(converged and conv_ene):
+            if(converged and conv_ene and not quiet):
                 print("Convergence achieved.")
                 break
             if(deadend and not drop_found and not force_mbar):
-                if(jj > 1):
-                    print("Converged, but not at a minimum.")
-                else:
-                    print("Convergence achieved.")
+                if not quiet:
+                    if(jj > 1):
+                        print("Converged, but not at a minimum.")
+                    else:
+                        print("Convergence achieved.")
                 break
 
             # doswap means we want to compare to this new step (make current the ref)
@@ -1323,8 +1348,9 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
 
 
         
-    print("Best fit found using span =",beststep[0],"on step",beststep[1],", RMSD =",beststep[2])
-    print("Total elapsed: " + str(timedelta(seconds=tm-tottime)))
+    if not quiet:
+        print("Best fit found using span =",beststep[0],"on step",beststep[1],", RMSD =",beststep[2])
+        print("Total elapsed: " + str(timedelta(seconds=tm-tottime)))
     s = np.argsort(besttp)
     bestp = bestp[s]
     X = X[s]
@@ -1333,7 +1359,7 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     if(executor is not None):
         executor.close()
         executor.join()
-    return tf, f, X
+    return tf, f, X, bestp, L
     return tf[1][ORDER], f[1][ORDER],X[ORDER]
     return besttf[bestorder], bestf[bestorder],X[bestorder]
     #return besttf[ORDER], bestf[ORDER], X[ORDER]
