@@ -116,7 +116,7 @@ cdef void update_curve(
     cdef cnp.intp_t i = 0, k
     cdef int kept = 0
 #    print()
-    if(j == tp.shape[0]-1):
+    if(j == tf.shape[0]-1):
         right = True
     if(j == 0):
         left = True
@@ -131,6 +131,7 @@ cdef void update_curve(
     cdef double norm = 0.0
     cdef double weight = 0.0
     cdef double step = 0.0
+    cdef double offset = 0.0
     cdef cnp.intp_t jj = j
     ret[:] = 0.0
     ret[0] = j
@@ -153,6 +154,7 @@ cdef void update_curve(
         elif(tf[bi] > reft):
             bmaxi = bi
         else:
+            offset = bi - j
             j = bi
             break
 

@@ -28,6 +28,7 @@ def infoprint(s,end="\n", quiet=False):
 def rescale(f,N=None,targetL=None,freezeends=False, interval=None):
     if (targetL is None):
         targetL = curveEuc(f,0,f.shape[0])
+    fN = f.shape[0]
 
     if(interval != None):
         N = int(targetL / interval)
@@ -175,14 +176,14 @@ def update(tf, f, X, E, tp, p, w, exe=None, procs=1, scale=1.0, maxstep=1.0, tar
         shutdown = True
     ptA,ptB = None,None
     srt = 0
-    end = f.shape[0]
+    end = p.shape[0]
     if(freezeends):
         ptA = p[0]
         ptB = p[-1]
         srt += 1
         end -= 1
     fn = up.start
-    #fn = update_curve
+    fn = update_curve
     if(fn is up.start):
         chunk=500
         if(procs * chunk > p.shape[0]):
@@ -191,14 +192,14 @@ def update(tf, f, X, E, tp, p, w, exe=None, procs=1, scale=1.0, maxstep=1.0, tar
         out = np.array([result.get() for result in work])
         out = np.vstack([ck for ck in out])
     elif(procs > 1):
-        work = [exe.apply_async(fn,(tf,w,X,E,f,j,scale,maxstep)) for j in range(f.shape[0])]
+        work = [exe.apply_async(fn,(tf,f,X,E,tp,p,w,j,scale,maxstep)) for j in range(p.shape[0])]
 #        work = [exe.submit(fn,tf,w,X,E,f,j,scale=scale) for j in range(f.shape[0])]
         out = np.array([result.get() for result in work])
 #        f = np.array([fut.result() for fut in concurrent.futures.as_completed(work)])
     else:
-        out = np.array([fn(tf,w,X,E,f,j,scale=scale,maxstep=maxstep) for j in range(f.shape[0])])
+        out = np.array([fn(tf,f,X,E,tp,p,w,j,scale=scale,maxstep=maxstep) for j in range(p.shape[0])])
     s = np.argsort(out[:,0])
-    p = out[s][:,1:]
+    p = out[s][:,1:][:p.shape[0]]
     if(shutdown):
         exe.close()
         exe.join()
@@ -302,7 +303,7 @@ def projectionIDX(f,X,ID,eps=1e-14):
     return Xf
 
 
-def update_curve(tf,w,X,E,f,j,scale=1.0,maxstep=1.0):
+def update_curve(tf,f,X,E,tp,p,w,j,scale=1.0,maxstep=1.0):
     keep = int(X.shape[0]*w)
     if(keep < 1):
         keep = 1
@@ -327,9 +328,38 @@ def update_curve(tf,w,X,E,f,j,scale=1.0,maxstep=1.0):
     maxi = i
     ehood = []
     nbhood = []
+    jj = j
+    reft = tp[j]
+    bi = 0
+    bmini = 0
+    bmaxi = tf.shape[0]-1
+    print("JJ=", jj, "REFT = ", reft)
+    breakpoint()
+    while bmini != bmaxi:
+        bi = (bmaxi + bmini) // 2
+        if(bmaxi == bmini):
+            if bmini == tf.shape[0]-1:
+                bmini -= 1
+            elif bmaxi == 0:
+                bmaxi += 1
+            if(2*tf[bi] < tf[bmini]+tf[bmaxi]):
+                bi = bmini
+            else:
+                bi = bmaxi
+            break
+        if(tf[bi] < reft):
+            bmini = bi
+        elif(tf[bi] > reft):
+            bmaxi = bi
+        else:
+            break
+    offset = tf[bi] - reft
+    j = bi
+    print("FOR JJ=", jj, "J=",j)
+    breakpoint()
     while(not (left and right)):
         ji = j + i
-        l = abs(tf[j] - tf[ji])
+        l = abs(tf[j] - tf[ji] + offset)
         L = 0.0
         #print("l is", l)
         if(l > 0.0):
@@ -394,8 +424,8 @@ def update_curve(tf,w,X,E,f,j,scale=1.0,maxstep=1.0):
         scale = maxstep/norm
     pt = f[j] + scale*(npt - f[j])
     #print("j=",j,"PT=",pt)
-    pt = np.hstack((j,pt))
-    infoprint("\r" + "Expectation {:10d} {: 7.3f} %      ".format(j,float(j)/tf.shape[0]*100),end="")
+    pt = np.hstack((jj,pt))
+    infoprint("\r" + "Expectation {:10d} {: 7.3f} %      ".format(jj,float(jj)/tf.shape[0]*100),end="")
     return pt
 
 #def plot_pcurve3D(X,fig=None,c='blue',line=False):
@@ -582,7 +612,7 @@ def bias_spring(refcrd, refidx, idx, k, crd, refalign=False):
 ################################################################################
 def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     eps=0.0005,eps_ene=.001,N=[100],W=[.1],init=None,checkpoint=None,
-    scale_list=[1.0],maxstep=1.0,mbar=(-1,-1),
+    scale_list=[1.0],maxstep=1.0,mbar=(-1,-1), n_points=None,
     freezeends=False,freezerange=None,interval=.1,
     FORCE_SWITCH=0,use_ene_indices=[],adaptive=False,savechk=False, quiet=False):
     """
@@ -719,8 +749,10 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         executor = Pool(processes=procs)
     tm = time.time()
     tottime = time.time()
+    if n_points is None:
+        n_points = X.shape[0]
     if not quiet:
-        print("Step = ",N,"D = ",X.shape[0],"K = ",I.max()+1, "eps = ",eps,"Procs = ",procs, "Force =", FORCE_SWITCH)
+        print("Step = ",N,"D = ",X.shape[0], "PTS = ", n_points, "K = ",I.max()+1, "eps = ",eps,"Procs = ",procs, "Force =", FORCE_SWITCH)
     bestf = None
     besttf = None
     mindelta = np.inf
@@ -755,8 +787,8 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     bestrms = [np.inf,np.inf,np.inf]
     bestpth = [np.inf,np.inf,np.inf]
     bestfre = [np.inf,np.inf,np.inf] 
-    bestp = np.zeros_like(f[0])
-    besttp = np.zeros_like(tf[0])
+    bestp = np.zeros((n_points,X.shape[1]))
+    besttp = np.zeros((n_points,X.shape[1]))
     rms = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]] # mean, min, max for step cur,prev. last is delta
     pth = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
     fre = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
@@ -799,7 +831,13 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         interval = None
     else:
         Nint = f[0].shape[0]
-    p = rescale(f[0],N=None,freezeends=freezeends,interval=None)
+    if n_points == 1:
+        p = np.array([f[0].mean(axis=0)])
+    elif n_points == 2:
+        p = np.array([f[0][0], f[0][-1]])
+    else:
+        p = np.vstack( (f[0][:1], f[0][::f[0].shape[0]//(n_points-2)], f[0][-1:]))
+        p = rescale(p,N=None,freezeends=freezeends,interval=None)
     tp = np.linspace(0.,1.,p.shape[0])
     progress_fname="progress.xyz"
     if((checkpoint is None) or (not os.path.exists(checkpoint))):
@@ -894,10 +932,10 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
         bestjj = 0
         savej = 1
         for i in range(n):
-            if i == 0:
-                adaptive = False
-            else:
-                adaptive = True
+            #if i == 0:
+            #    adaptive = False
+            #else:
+            #    adaptive = True
             #infoprint("\rSaving new iteration...               ",end="")
             #L = curveEuc(f[0],0,f[0].shape[0])
             #ret = np.insert(f[0],0,tf[0],axis=1)
@@ -909,35 +947,6 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             # np.savez("progress.npz",**out)
 #            savexyz(p,"progress_"+str(ii) + ".xyz",mode='w')
             
-            infoprint("\rProjecting...               ",end="", quiet=quiet)
-            tf[1],f[1],L = project(p, X, exe=executor, procs=procs, eps=1e-14)
-            
-            X0 = X.copy()
-            I0 = I.copy()
-            U0 = U.copy()
-            ORDER0 = ORDER.copy()
-            idx = np.argsort(tf[1])
-            X = X[idx].copy()
-            ORDER = idx.argsort()[ORDER]
-            I = I[idx]
-            U = U[idx]
-            tf[1] = tf[1][idx]
-            f[1] = f[1][idx]
-            #Lmemory[ii % memory] = L
-            #avgL = Lmemory[Lmemory > 0].mean()
-            # tf gives the distance along path, so since the new tf things can
-            # swapped, put it back in order.
-            
-            tfC[1],fC[1],_ = project(p, C, exe=executor, procs=procs)
-            idxC = np.argsort(tfC[1])
-            tfC[1] = tfC[1][idxC]
-            fC[1] = fC[1][idxC]
-            C0 = C.copy()
-            K0 = K.copy()
-            ORDERC0 = ORDERC.copy()
-            C = C[idxC]
-            K = K[idxC]
-            ORDERC = idxC.argsort()[ORDERC]
 
             ene_updated = False
             conv_ene = False if mbar[1] >= 0 else True
@@ -988,7 +997,6 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             #print(F[1])
             # find the expected point on the curve given the points that project
             # there
-            p1 = p.copy()
             kT = .001987*310
 
             scale_used = scale
@@ -998,6 +1006,39 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             p      = update(tf[1], f[1], X, (ene[1]),tp,p,w,
                             scale=scale, maxstep=maxstep, targetL=L,
                             freezeends=freezeends, exe=executor, procs=procs)
+
+            infoprint("\rProjecting...               ",end="", quiet=quiet)
+            tf[1],f[1],L = project(p, X, exe=executor, procs=procs, eps=1e-14)
+            
+            X0 = X.copy()
+            I0 = I.copy()
+            U0 = U.copy()
+            ORDER0 = ORDER.copy()
+            idx = np.argsort(tf[1])
+            X = X[idx].copy()
+            ORDER = idx.argsort()[ORDER]
+            I = I[idx]
+            U = U[idx]
+            tf[1] = tf[1][idx]
+            f[1] = f[1][idx]
+            #Lmemory[ii % memory] = L
+            #avgL = Lmemory[Lmemory > 0].mean()
+            # tf gives the distance along path, so since the new tf things can
+            # swapped, put it back in order.
+            
+            tfC[1],fC[1],_ = project(p, C, exe=executor, procs=procs)
+            idxC = np.argsort(tfC[1])
+            tfC[1] = tfC[1][idxC]
+            fC[1] = fC[1][idxC]
+            C0 = C.copy()
+            K0 = K.copy()
+            ORDERC0 = ORDERC.copy()
+            C = C[idxC]
+            K = K[idxC]
+            ORDERC = idxC.argsort()[ORDERC]
+            
+            p1 = p.copy()
+            
             #p = f[1].copy()
             #tp = tf[1].copy()
             scalesteps += 1
@@ -1005,15 +1046,6 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             #    scale *= .9
             #f[1][:] = p
 
-            if False:
-                tf_tmp,f_tmp,L = project(f[1], p, exe=executor, procs=procs, eps=1e-14)
-                idx = np.argsort(tf_tmp)
-                X = X[idx]
-                I = I[idx]
-                U = U[idx]
-                ORDER = ORDER[idx]
-                tf[1] = tf_tmp[idx]
-                f[1] = f[1][idx]
 
             # done! check if we are stationary and get timing
             infoprint("\rPreparing next step...              ",end="", quiet=quiet)
@@ -1028,9 +1060,9 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
             
             # save if best
             winner = "?"
-            newrms = stats(X,  p, w=ene[1])
-            rms[1] = stats(X,  p, w=ene[1])
-            pth[1] = stats(p1, p, w=ene[1])
+            newrms = stats(X,  f[1], w=ene[1])
+            rms[1] = stats(X,  f[1], w=ene[1])
+            pth[1] = stats(p1, p)
             rms[2] = delta(rms)
             pth[2] = delta(pth)
             # fre[2] = delta(fre)
@@ -1351,9 +1383,11 @@ def pcurve3D_MBAR(X,I,C,K,U=None,E=None,procs=1,
     if not quiet:
         print("Best fit found using span =",beststep[0],"on step",beststep[1],", RMSD =",beststep[2])
         print("Total elapsed: " + str(timedelta(seconds=tm-tottime)))
-    s = np.argsort(besttp)
-    bestp = bestp[s]
-    X = X[s]
+    #s = np.argsort(besttf)
+    #bestf = bestf[s]
+    #X = X[s]
+    #s = np.argsort(besttp)
+    #bestp = bestp[s]
     #bestp = clip(bestp)
     tf ,f,L = project(bestp, X, exe=executor, procs=procs, eps=1e-14)
     if(executor is not None):
