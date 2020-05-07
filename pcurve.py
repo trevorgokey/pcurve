@@ -8,6 +8,9 @@ import scipy.interpolate as si
 import sys
 import pickle
 import os
+from copy import deepcopy
+from pydantic import BaseModel
+from typing import List, Optional, Union, Any
 
 VERBOSE = False
 
@@ -1427,4 +1430,1054 @@ def orthogonal_proj(zfront, zback):
                         [0,1,0,0],
                         [0,0,a,b],
                         [0,0,-1e-5,zback]])
+
+
+
+class SampleState(BaseModel):
+    coords: List[Any]
+    """ A collection of data based on some state
+    """
+
+    def __init__(self, arr: List[Any]):
+        self.coords = arr.copy()
+        pass
+
+class BiasedSampleState(SampleState):
+    """ A collection of data that includes some biasing force
+    """
+    def __init__(self):
+        self.parameters = []
+        pass
+
+    def bias(self):
+        pass
+
+
+class DataSet():
+    state: List[Union[SampleState, BiasedSampleState]]
+    """ A collection of SampleStates that the PrincipalCurveFrame operates on
+    """
+
+    def __init__(self):
+        self.state = []
+
+    def mbar_weight_matrix():
+        pass
+
+    def flatten():
+        pass
+
+class PrincipalCurveFrameComparison(BaseModel):
+    """ Calculates and collects information to compare two PrincipalCurveFrames 
+    """
+    
+    def __init__(self, reference_frame):
+        self.reference_frame = reference_frame
+        pass
+
+    def printinfoline(name, d, end="\n"):
+        def P(b,a):
+            if( a == 0 ):
+                return b-a
+            return np.nan if (a == np.nan or b == np.nan) else (b-a)/a
+        #print(d) # DELETE
+        print(">>> {:6s}| Mean= {: 9.6e} MeanD= {: 9.6e} Min= {: 9.6e} MinD= {: 9.6e} Max= {: 9.6e} MaxD= {: 9.6e}".format(
+            name,
+            d[1][0], P(d[1][0],d[0][0]),
+            d[1][1], P(d[1][1],d[0][1]),
+            d[1][2], P(d[1][2],d[0][2])),
+            end=end)
+
+    def stats(a,b,w=None):
+        N = a.shape[0]
+        if(w is None):
+            w = np.ones((a.shape[0],),dtype=np.float64)/N
+        axis = 1 if (len(a.shape) > 1) else 0
+        d = (((b - a)**2).sum(axis=axis)**.5)
+        return (d*w).sum(),d.min(),d.max()
+
+    def delta(d):
+        return [y-x if x == 0 else (y-x)/x for x,y in zip(d[0],d[1])]
+    
+
+class PrincipalCurveFrame(BaseModel):
+    """ A frame that represents a principal curve fit to the DataSet 
+    """
+
+    def __init__(self, ds):
+        self.dataset     = ds
+        self.pcurve      = None
+        pass
+
+    #def __reduce__(self):
+    #    pass
+
+    #def to_dict(self):
+    #    pass
+
+    @staticmethod
+    def from_dict(self):
+        return None
+
+    def project(self):
+        pass
+
+    def update(self):
+        pass
+
+    def run_step(self, executor=None):
+        self.ds.update_weights( self)
+        self.update( executor)
+        self.rescale()
+        self.project( executor)
+        pass
+
+    def rescale(self, f,N=None,targetL=None,freezeends=False, interval=None):
+        if (targetL is None):
+            targetL = curveEuc(f,0,f.shape[0])
+        fN = f.shape[0]
+
+        if(interval != None):
+            N = int(targetL / interval)
+        elif (N is None):
+            N = f.shape[0]
+        if(N == 1):
+            el = targetL
+        else:
+            el = targetL/(N-1)
+            # redistribute points along path to unit speed (evenly spaced)
+
+        infoprint("\rReparameterizing curve...       ",end="")
+        f1 = f.copy()
+        pt=f[0]
+        j=1
+        f = np.empty([N] + list(f.shape[1:]),dtype=np.float64)
+        end = f.shape[0]
+        f[0] = f1[0]
+        if(freezeends):
+            end -= 1
+            f[-1] = f1[-1]
+        for i in range(1,end):
+            l = 0
+            k = 0
+            w = 1.0
+            while(j < f.shape[0]):
+                k = euc(pt,f1[j])
+                if(l+k > el):
+                    break
+                l += k
+                pt = f1[j]
+                j += 1
+            if(j == f.shape[0]):
+                j = f.shape[0] - 1
+            if(k == 0):
+                w = 1.0
+            else:
+                w = (el-l)/k 
+            pt = pt +  w * (f1[j] - pt)
+            f[i] = pt
+        return f
+
+    
+    def clip(self, f, N=None, freezeends=False, exe=None, procs=1, interval=None):
+        clipped = True
+        it = 0
+        start=1
+        end=f.shape[0]-2
+        maxclip = 0.0
+        quick = True
+        dx = 1
+        costheta = np.cos(np.pi*7/8)
+        if quick:
+            dx = 2
+        while(clipped == True and it < 10000):
+            clipped = False
+            it += 1
+            maxclip = 0.0
+            f0 = f.copy()
+            for i in range(1,f.shape[0]-1,dx):
+                a = euc(f[i-1],f[i ])
+                b = euc(f[i+1],f[i ])
+                if(a == 0.0 or b == 0.0):
+                    continue
+                p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
+                #if(p < a or  euc(f[i+1],f[i ]) < a):
+                # 
+                if(p > costheta ):
+                    maxclip = max(maxclip, abs(p))
+                    f0[i] = (f[i-1] + f[i+1]) / 2.0
+                    clipped = True
+            f = f0.copy()
+            if quick:
+                for i in range(2,f.shape[0]-1,2):
+                    a = euc(f[i-1],f[i ])
+                    b = euc(f[i+1],f[i ])
+                    if(a == 0.0 or b == 0.0):
+                        continue
+                    p = (((f[i-1] - f[i])/a) * (f[i+1] - f[i])/b).sum()
+                    #if(p < a or  euc(f[i+1],f[i ]) < a):
+                    # 
+                    if(p > costheta ):
+                        maxclip = max(maxclip, abs(p))
+                        f0[i] = (f[i-1] + f[i+1]) / 2.0
+                        clipped = True
+                f = f0.copy()
+            if VERBOSE and maxclip > 0.0:
+                print("clip: {:d} {:20.15e}".format(it, maxclip), end="\r")
+            if maxclip == 0.0:
+                break
+        if VERBOSE:
+            print()
+        #print("clip: {:d} {:20.15e}".format(it, maxclip), end="\r")
+
+        #targetL = curveEuc(f, 0, f.shape[0])
+        #p = rescale(f, N=None, targetL=targetL, 
+        #    freezeends=freezeends, interval=None)
+        #p2 = rescale(f[::-1], N=None, targetL=targetL, 
+        #    freezeends=freezeends, interval=None)
+        #f = (p + p2[::-1])/2.0
+        #f = rescale(f, N=None, targetL=targetL, 
+        #    freezeends=freezeends, interval=None)
+        return f
+
+class PrincipalCurvePCAFrame(PrincipalCurveFrame):
+    """ A frame that sets the model to the first principal axis """
+
+    def __init__(self, DataSet):
+        pass
+
+    @staticmethod
+    def apply(self):
+
+        if(not np.isfinite(X).all()):
+            print("X not finite! rows:")
+            print(np.arange(X.shape[0])[~np.isfinite(X).any(axis=1)])
+            return
+        if(not np.isfinite(C).all()):
+            print("C not finite! rows:")
+            print(np.arange(C.shape[0])[~np.isfinite(C).any(axis=1)])
+            return
+        #T = np.vstack((X,C)).mean(axis=0)
+        T = X.mean(axis=0)
+        ORDER = np.arange(X.shape[0])
+        ORDERC = np.arange(C.shape[0])
+        X = X - T.T
+        C = C - T.T
+        ene = [E,E]
+        if(ene[0] is None):
+            ene[0] = np.ones(X.shape[0],np.float64)/X.shape[0]
+        if(ene[1] is None):
+            ene[1] = np.ones(X.shape[0],np.float64)/X.shape[0]
+        if(init is None):
+            #initalize f as first eigenval
+            # fe is dx1
+            #fe = PCA(n_components=1).fit(np.vstack((X,C))).components_[0].reshape(-1,1)
+            fe = PCA(n_components=1).fit(X).components_[0].reshape(-1,1)
+            # project is Nx1
+            projection = np.dot(X,fe).reshape(-1,1)
+            #projection = np.linspace(projection.min(),projection.max(),X.shape[0]).reshape(-1,1)
+            prjC = np.dot(C,fe).reshape(-1,1)
+            f = [np.dot(projection,fe.T),None]
+            #if(f[0][0][-1] < 0.0):
+            #    f[0] = f[0][::-1]
+            #    projection = projection[::-1]
+            #    fe = -fe
+            if(freezeends and freezerange is not None):
+                if(isinstance(freezerange, list)):
+                    prA = freezerange[0]#/fe[2]
+                    prB = freezerange[1]#/fe[2]
+                    projection = np.linspace(prA, prB, X.shape[0]).reshape(-1,1)
+                else:
+                    freezerange = float(freezerange)
+                    prA = min(projection)*freezerange
+                    prB = max(projection)*freezerange
+                    projection = np.linspace(prA, prB, X.shape[0]).reshape(-1,1)
+            # get displacements, want project (Nx1) * fe.T (1xd) = Nxd 
+            idx = np.argsort(projection.T[0])
+            idxC = np.argsort(prjC.T[0])
+            projection = projection[idx]
+            prjC = prjC[idxC]
+            tf = projection.copy().reshape(-1)
+            tfC = prjC.copy().reshape(-1)
+            tfC -= tf.min()
+            tf -= tf.min()
+            tfC = [tfC / tf.max(), tfC/ tf.max() ]
+            tf = [tf / tf.max(),tf / tf.max() ]
+            fC = [np.dot(prjC,fe.T) ,np.dot(prjC,fe.T) ]
+            f = [np.dot(projection,fe.T) ,np.dot(projection,fe.T)]
+            F = [np.zeros_like(K),np.zeros_like(K)]
+        else:
+            tf = init[:,0]
+            idx = np.argsort(tf)
+            idxC = np.argsort(tfC)
+            tf = [tf[idx],tf[idx]]
+            f = [init[:,1:4][idx], init[:,1:4][idx]]
+            F = [np.zeros_like(K),np.zeros_like(K)]
+        X = X + T.T
+        C = C + T.T
+        f[0] += T.T
+        fC[0] += T.T 
+        #f[0] -= f[0].mean(axis=0) - T.T
+        #fC[0] -= fC[0].mean(axis=0) - T.T 
+        if U is None:
+            U = np.zeros(X.shape[0])
+
+
+        X = X[idx]
+        ORDER = idx.argsort()
+        C = C[idxC]
+        ORDERC = idxC.argsort()
+        K = K[idxC]
+        ene[0] = ene[0][idx]
+        F[0] = F[0][idxC]
+        I = I[idx]
+        if( not isinstance(N, list) ):
+            N = [N]
+        if( not isinstance(W, list) ):
+            W = [W]
+    pass
+
+class PrincipalCurve(BaseModel):
+    """
+    """
+    current_frame: PrincipalCurveFrame
+
+    def __init__(self, fnm: str):
+        self.current_frame = PrincipalCurveFrame(fnm)
+
+    def __init__(self, frame: Union[PrincipalCurveFrame, PrincipalCurvePCAFrame]):
+        self.current_frame = deepcopy(frame)
+
+    def __init__(self, dataset: DataSet):
+        frame = PrincipalCurvePCAFrame( dataset)
+
+    def __init__(self, sample: Union[SampleState, BiasedSampleState]):
+        dataset = DataSet(sample)
+        self.current_frame = PrincipalCurvePCAFrame( dataset)
+
+    def __init__(self, dataset: DataSet):
+        self.X = None
+        self.p = None
+        self.f = None
+        self.t = None
+
+        self.bias = None
+        self.I = None
+        self.C = None
+        self.K = None
+        self.U = None
+        self.E = None
+
+        self.W = None
+        self.checkpoint
+        self.init = None
+        self.N = 0
+        self.eps = 1e-7
+        self.eps_ene = 1e-7
+        self.n_points = None
+        self.mbar = (-1, -1)
+        self.maxstep = 1.0
+        self.scale_list = [1.0]
+        self.freezeends= False
+        self.freezerange= None
+        self.interval = 0.1
+        self.FORCE_SWITCH = 0
+        self.use_ene_indices = []
+        self.adaptive = False
+        self.quiet = False
+        self.proces = 1.0
+
+    def rotate(x):
+        x[0] = x[1]
+        return x
+
+    @staticmethod
+    def from_dict():
+        return None
+
+    def from_checkpoint():
+        if(checkpoint and os.path.exists(checkpoint)):
+            if VERBOSE and not quiet:
+                print("Loading checkpoint from",checkpoint)
+            chk = np.load(checkpoint)
+            X = chk['X']
+            I = chk['I']
+            C = chk['C']
+            K = chk['K']
+            p = chk['p']
+            tp = chk['p']
+            scale_list = chk['scale_list']
+            F = [chk['F'],chk['F']]
+            tf = [chk['tf'],None]
+            f = [chk['f'],None]
+            ene = [chk['E'],chk['E']]
+            tfC = [chk['tfC'],None]
+            fC  = [chk['fC'],None]
+            if('FORCE_SWITCH' in chk):
+                FORCE_SWITCH = chk['FORCE_SWITCH']
+    #        N = chk['N']
+    #        W = chk['W']
+            ii = int(chk['ii']) + 1
+            U = chk['U']
+            ORDER = chk['ORDER']
+            ORDERC = chk['ORDERC']
+        return None
+
+    def fit(self):
+
+        # check if initialized (have initial frame)
+
+        # repeat iteration until converge
+            # perform one minimization step into new frame
+            # update weights (mbar)
+            # save comparisons
+
+        # save final frame
+
+        procs = int(procs)
+        from sklearn.decomposition import PCA
+        import time
+        from datetime import timedelta
+        ii = 0
+        MBAR = None
+        calc_init = True
+        
+            
+        executor = None
+        if(procs > X.shape[0]):
+            procs = 1#X.shape[0]
+        else:
+            executor = Pool(processes=procs)
+        tm = time.time()
+        tottime = time.time()
+        if n_points is None:
+            n_points = X.shape[0]
+        if not quiet:
+            print("Step = ",N,"D = ",X.shape[0], "PTS = ", n_points, "K = ",I.max()+1, "eps = ",eps,"Procs = ",procs, "Force =", FORCE_SWITCH)
+        bestf = None
+        besttf = None
+        mindelta = np.inf
+        beststep = [None,None]
+        bestene = ene[0].copy()
+        if(K is None):
+            bestF = None
+        else:
+            np.zeros_like(K)
+        bestorder = ORDER.copy()
+        bestorderc = ORDERC.copy()
+        bestK = K.copy()
+        bestX = X.copy()
+        bestC = C.copy()
+        besttfC = tfC[0].copy()
+        winner="N"
+        bestL = np.inf
+        memory=1
+        Lmemory = np.full((memory,),-1.0)
+        minmax = 0.0
+        curmax = 0.0
+        maxscale = 1.0#scale
+        rmsd = np.full((memory,),-1.0)
+        pathmem = np.empty([memory] + list(f[0].shape),dtype=np.float)
+        steplimit = 1.0
+        steplimitreached = False
+        maxscale_start = maxscale
+        maxstep_start = maxstep
+        scalesteps = 1
+        oldmeanFD = 0.0
+        oldmeanfD = 0.0
+        bestrms = [np.inf,np.inf,np.inf]
+        bestpth = [np.inf,np.inf,np.inf]
+        bestfre = [np.inf,np.inf,np.inf] 
+        bestp = np.zeros((n_points,X.shape[1]))
+        besttp = np.zeros((n_points,X.shape[1]))
+        rms = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]] # mean, min, max for step cur,prev. last is delta
+        pth = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
+        fre = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
+        converged = False
+        targetL = 0.0
+
+        dis = euc(f[0][0],f[0][1])
+        savexyz(X,"data.xyz",mode='w')
+        savexyz(C,"center.xyz",mode='w')
+        
+        Nint = None
+        if(interval != None):
+            Nint = int(curveEuc(f[0])/interval)
+            interval = None
+        else:
+            Nint = f[0].shape[0]
+        if n_points == 1:
+            p = np.array([f[0].mean(axis=0)])
+        elif n_points == 2:
+            p = np.array([f[0][0], f[0][-1]])
+        else:
+            p = np.vstack( (f[0][:1], f[0][::f[0].shape[0]//(n_points-2)], f[0][-1:]))
+            p = rescale(p,N=None,freezeends=freezeends,interval=None)
+        tp = np.linspace(0.,1.,p.shape[0])
+        progress_fname="progress.xyz"
+        if((checkpoint is None) or (not os.path.exists(checkpoint))):
+            savexyz(X,"data.xyz",mode='w')
+            savexyz(f[0]*1.5/dis,progress_fname,mode='w')
+            savexyz(f[0],progress_fname,mode='a')
+            savexyz(f[0]*1.5/dis,"f.xyz",mode='w')
+            savexyz(f[0],"f.xyz",mode='a')
+            savexyz(f[0]*1.5/dis,"best.xyz",mode='w')
+            savexyz(f[0],"best.xyz",mode='a')
+        else:
+            savexyz(f[0],progress_fname,mode='a')
+            savexyz(f[0],"f.xyz",mode='a')
+            savexyz(f[0],"best.xyz",mode='a')
+            savexyz(X,"data.xyz",mode='a')
+        if(checkpoint is None):
+            checkpoint="checkpoint.npz"
+        
+        drop_state = None
+        pathmem[0][:] = f[0]
+        memory_idx = 1
+        pathmem_N = 1
+        # MAIN LOOP
+        firstbad = True
+        rmsd[:] = -1.0
+        needmbar = mbar[0] > 0 or mbar[1] >= 0
+        bestp = p.copy()
+        besttp = tp.copy()
+        savej = 0
+        np.savez("chk."+str(savej)+".npz", tf=tf[0], f=f[0], X=X, p=bestp)
+        savej = 1
+        for w,n,scale in zip(W,N,scale_list):
+            if(not (w > 0.0 and w < 1.0)):
+                print("ERROR: span =",w,"is not acceptable")
+                continue
+            force_mbar = False
+            drop_found = False
+            deadend=False
+            maxscale = scale
+            maxscale_start = scale
+            scalelow_param = eps
+            scalelow = scalelow_param
+            scalehigh = maxscale
+            scalehigh_param = maxscale
+            scale_argmax = False
+            scale = scalehigh_param 
+            if(calc_init):
+                needmbar = mbar[0] > 0 or mbar[1] >= 0
+                calc_init = False
+                infoprint("\rCalculating RMS...              ",end="\n", quiet=quiet)
+                bestrms = [np.inf,np.inf,np.inf]
+                rms = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]] # mean, min, max for step cur,prev. last is delta
+                pth = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
+                fre = [[0,0,0],[0,0,0],[np.inf,np.inf,np.inf]]
+                rms[1] = stats(X,    f[0], w=ene[0])
+                rms[2] = delta(rms)
+                if(rms[1][0] < bestrms[0]):
+                #if(False):
+                    bestrms[0] = rms[1][0]
+                    bestrms[1] = rms[1][1]
+                    bestrms[2] = rms[1][2]
+                    bestf = f[0].copy()
+                    bestp = f[0].copy()
+                    besttp = tf[0].copy()
+                    bestF = F[0].copy()
+                    besttf = tf[0].copy()
+                    bestene = ene[0].copy()
+                    beststep = [w,0,0]
+                    bestL = curveEuc(f[0],0,f[0].shape[0])
+                    bestorder = ORDER.copy()
+                    bestorderc = ORDERC.copy()
+                    bestK = K.copy()
+                    bestX = X.copy()
+                    bestC = C.copy()
+                    besttfC = tfC[0].copy()
+                L = curveEuc(f[0],0,f[0].shape[0])
+                if(savechk):
+                    np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I, E=ene[0], F=F[0],
+                            tf=tf[0], f=f[0], tfC=tfC[0], fC=fC[0],
+                            W=W,N=N,L=L,ii=ii-1,scale_list=scale_list,p=p,tp=tp,
+                            use_ene_indices=use_ene_indices) 
+                if True:
+                    rms = rotate(rms)
+            winner = '!'
+            if not quiet:
+                print("\rSpan {: 5.2f} Step {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2f} L {: 10.8e}".format(
+                    w*100.,ii, winner, scale, maxstep, L) ,end="\n")
+                printinfoline("RMS",rms)
+                print()
+                sys.stdout.flush()
+            jj = 0
+            bestjj = 0
+            savej = 1
+            for i in range(n):
+                #if i == 0:
+                #    adaptive = False
+                #else:
+                #    adaptive = True
+                #infoprint("\rSaving new iteration...               ",end="")
+                #L = curveEuc(f[0],0,f[0].shape[0])
+                #ret = np.insert(f[0],0,tf[0],axis=1)
+                #ret = np.append(ret,X,axis=1)
+                #dat = [[ret,L,ene[0],C,F[0],I]]
+                #out = {}
+                # for a,b in zip(W,dat):
+                #         out["w"+str(a)] = b
+                # np.savez("progress.npz",**out)
+    #            savexyz(p,"progress_"+str(ii) + ".xyz",mode='w')
+                
+
+                ene_updated = False
+                conv_ene = False if mbar[1] >= 0 else True
+                case1 = (mbar[1] == 0 and converged)
+                case2 = (mbar[0] == (ii+1))
+                case3 = (mbar[1] > 0 and (mbar[0] > ii and 
+                            ((ii - mbar[0] +1 ) % mbar[1] == 0) ))
+                case4 = (deadend and not conv_ene)
+                case5 = force_mbar and (case3 or mbar[1] == 0)
+                dombar = case1 or case2 or case3 or case4 or case5
+                if(dombar):
+                    needmbar = False
+                    force_mbar = False
+                    infoprint("\rMBAR estimation of energies...        ",end="", quiet=quiet)
+                    _U = None
+                    if(len(use_ene_indices) == 0):
+                        _U = np.zeros_like(tf[0])
+                    else:
+                        _U = U[:, use_ene_indices]
+                        if(len(_U.shape) > 1):
+                            _U = _U.sum(axis=1)
+                    ene[1],F[1],MBAR = calc_W_mat(tf[1],f[1],X,I,
+                        tfC[1],fC[1],C,K,L,U=_U-_U.mean(),F=F[0], 
+                        FORCE_SWITCH=FORCE_SWITCH)
+                    #fre[1] = stats(F[0], F[1])
+                    fre[1] = [F[1].mean(), F[1].min(), F[1].max()]
+                    fre[2] = delta(fre)
+                    ene_updated=True
+                    scalesteps=1
+                    scale=0
+                    scalelow = scalelow_param
+                    scalehigh = scalehigh_param
+                    #scale = maxscale * float(n - ii) / n
+                    # rms[2] = np.inf
+                    # if(deadend):
+                    #     scalehigh = scalehigh_param
+                    #     scalelow = scalelow_param
+                    #     scale = (scalehigh - scalelow) / 2.0
+                    #     deadend = False
+                    if(np.abs(fre[2][0]) < eps_ene or mbar[1] < 0):
+                        conv_ene = True
+                        pathmem_N = 0
+                        memory_idx = 0
+                else:
+                    ene[0],F[0] = ene[1],F[1]
+                #print(conv_ene)
+                #print(ene[1])
+                #print(F[1])
+                # find the expected point on the curve given the points that project
+                # there
+                kT = .001987*310
+
+                scale_used = scale
+                # tf has the modified projections on the line, compared to p
+                # now need to move p
+                infoprint("\rUpdating curve..       ",end="", quiet=quiet)
+                p      = update(tf[1], f[1], X, (ene[1]),tp,p,w,
+                                scale=scale, maxstep=maxstep, targetL=L,
+                                freezeends=freezeends, exe=executor, procs=procs)
+
+                infoprint("\rProjecting...               ",end="", quiet=quiet)
+                tf[1],f[1],L = project(p, X, exe=executor, procs=procs, eps=1e-14)
+                
+                X0 = X.copy()
+                I0 = I.copy()
+                U0 = U.copy()
+                ORDER0 = ORDER.copy()
+                idx = np.argsort(tf[1])
+                X = X[idx].copy()
+                ORDER = idx.argsort()[ORDER]
+                I = I[idx]
+                U = U[idx]
+                tf[1] = tf[1][idx]
+                f[1] = f[1][idx]
+                #Lmemory[ii % memory] = L
+                #avgL = Lmemory[Lmemory > 0].mean()
+                # tf gives the distance along path, so since the new tf things can
+                # swapped, put it back in order.
+                
+                tfC[1],fC[1],_ = project(p, C, exe=executor, procs=procs)
+                idxC = np.argsort(tfC[1])
+                tfC[1] = tfC[1][idxC]
+                fC[1] = fC[1][idxC]
+                C0 = C.copy()
+                K0 = K.copy()
+                ORDERC0 = ORDERC.copy()
+                C = C[idxC]
+                K = K[idxC]
+                ORDERC = idxC.argsort()[ORDERC]
+                
+                p1 = p.copy()
+                
+                #p = f[1].copy()
+                #tp = tf[1].copy()
+                scalesteps += 1
+                #if(scalesteps % 200 == 0):
+                #    scale *= .9
+                #f[1][:] = p
+
+
+                # done! check if we are stationary and get timing
+                infoprint("\rPreparing next step...              ",end="", quiet=quiet)
+                
+        
+                # timing
+                tm2 = time.time()
+                tmd = tm2 - tm
+                d = timedelta(seconds=tmd)
+                tm = tm2
+                timestr = str(d)
+                
+                # save if best
+                winner = "?"
+                newrms = stats(X,  f[1], w=ene[1])
+                rms[1] = stats(X,  f[1], w=ene[1])
+                pth[1] = stats(p1, p)
+                rms[2] = delta(rms)
+                pth[2] = delta(pth)
+                # fre[2] = delta(fre)
+                #infoprint("\n" + str(rms))
+                ii += 1
+                savexyz(p,progress_fname)
+                savexyz(p,'p.xyz')
+                #savexyz(X,"data.xyz")
+                savexyz(f[1],"f.xyz")
+                doswap = False
+                jj += 1
+                if(dombar):
+                    beststep = [w,ii,rms[1][0]]
+                    winner = 'E'
+                    scalehigh = scalehigh_param
+                    scalelow = scalelow_param
+                    scale = scalehigh
+                    converged = False
+                    deadend = False
+                    drop_found = False
+                    jj = 0
+                    if(conv_ene):
+                        if savechk:
+                            try:
+                                os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
+                            except FileNotFoundError:
+                                pass
+                            try:
+                                np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                        E=ene[1], U=U, F=F[1],
+                                        tf=tf[1], f=f[1], tfC=tfC[0], fC=fC[0],
+                                        W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                        mbar_pickle=pickle.dumps(MBAR),
+                                        FORCE_SWITCH=FORCE_SWITCH,
+                                        use_ene_indices=use_ene_indices)
+                            except MemoryError:
+                                if VERBOSE:
+                                    print("MemoryError! Saving mbar data into separate file")
+                                with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
+                                        'wb') as pfile:
+                                    pickle.dump(MBAR, pfile)
+                                if(os.path.exists(checkpoint)):
+                                    os.remove(checkpoint)
+                                np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                        E=ene[1], U=U, F=F[1],
+                                        tf=tf[1], f=f[1], tfC=tfC[0], fC=fC[0],
+                                        W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                        FORCE_SWITCH=FORCE_SWITCH,
+                                        use_ene_indices=use_ene_indices)
+                        rmsd[ii%memory] = np.abs(rms[2][0])
+                        if(np.abs(rms[2][0]) < eps):
+                            converged = True
+                        #elif((rmsd > 0).any()):
+                        #    if(np.abs(rmsd[rmsd > 0.0]).mean() < eps):
+                        #        converged = True
+                    #else:
+                        # want to set this rms from reeval to current
+                        #bestjj = jj
+                        #bestrms = rms[1]
+                        #bestfre = fre[1]
+                        #bestpth = pth[1]
+                        #bestp = p.copy()
+                        #besttp = tp.copy()
+                        #bestf = f[1].copy()
+                        #besttf = tf[1].copy()
+                        #bestene = ene[1].copy()
+                        #bestF = F[1].copy()
+                        #beststep = [w,ii,bestrms[0]]
+                        #bestorder = ORDER.copy()
+                        #bestorderc = ORDERC.copy()
+                        #bestK = K.copy()
+                        #bestX = X.copy()
+                        #bestC = C.copy()
+                        #besttfC = tfC.copy()
+                        #bestL = L
+                    doswap = True
+                    bestrms = [np.inf,np.inf,np.inf]
+                    bestpth = [np.inf,np.inf,np.inf]
+                    bestfre = [np.inf,np.inf,np.inf] 
+                elif( adaptive and rms[2][0] >= 0):
+                    #print("Case 1: raised target")
+                    # we increased, so reduce the scale
+                    winner = 'X'
+                    scalehigh = scale
+                    scale = scale - (scalehigh -scalelow)/2.0
+                    converged = False
+
+                    p = p1.copy()
+                    X = X0.copy()
+                    U = U0.copy()
+                    I = I0.copy()
+                    K = K0.copy()
+                    C = C0.copy()
+                    ORDER = ORDER0.copy()
+                    ORDERC = ORDERC0.copy()
+
+                    if scalehigh == scalelow or abs(scale-scalelow_param) < eps or np.abs(rms[2][0]) < eps:
+                        deadend=True
+                        winner = 'D'
+                        if(conv_ene):
+                            converged = True
+                        else:
+                            if(needmbar):
+                                conv_ene = False
+                                force_mbar = True
+                            elif(np.abs(fre[2][0]) < eps_ene or mbar[1] < 0):
+                                conv_ene = True
+                                force_mbar = False
+                            else:
+                                conv_ene = False
+                                force_mbar = True
+                if((not adaptive) or ((not dombar) and (rms[2][0] < 0 or (deadend and drop_found)))):
+                    if((not adaptive) or rms[2][0] < 0):
+                        scalelow = scale
+                        scale = scale + (scalehigh - scalelow)/2.0
+                        drop_found = True
+                        deadend = False
+                        winner = '-'
+
+                        if((not adaptive) or (rms[1][0] < bestrms[0])):
+                            winner = '+'
+                            #  this is the best point on the search, keep it.
+                            bestjj = jj
+                            bestrms = rms[1]
+                            bestfre = fre[1]
+                            bestpth = pth[1]
+                            bestp = p.copy()
+                            besttp = tp.copy()
+                            bestf = f[1].copy()
+                            besttf = tf[1].copy()
+                            bestene = ene[1].copy()
+                            bestF = F[1].copy()
+                            beststep = [w,ii,bestrms[0]]
+                            bestorder = ORDER.copy()
+                            bestorderc = ORDERC.copy()
+                            bestK = K.copy()
+                            bestX = X.copy()
+                            bestC = C.copy()
+                            besttfC = tfC[1].copy()
+                            bestL = L
+                            #print("SAVED")
+                            #savexyz(p,"p.xyz",mode='w')
+                        
+                    if(adaptive and ((not deadend) or (not drop_found)) and
+                        abs(scalehigh - scale) >= scalelow_param):
+                        # we found a low point, and can increase the scale to
+                        # perhaps find a larger displacement
+
+                        # print("Case 2: lowered target with more room to wiggle",scalehigh, scale, scalehigh-scale)
+                        converged = False
+                        p = p1.copy()
+                        X = X0.copy()
+                        U = U0.copy()
+                        I = I0.copy()
+                        K = K0.copy()
+                        C = C0.copy()
+                        ORDER = ORDER0.copy()
+                        ORDERC = ORDERC0.copy()
+                    else:
+                        # we found a low point, and cannot increase the scale
+                        # 
+                        #   We already determined the best, so now set it to that,
+                        #+ and clear the counters to start a new macro.
+                        #
+                        #   Also save the state to disk since it is part of the
+                        #+ path
+                        # print("Case 3: lowered target and nowhere to wiggle." +
+                        #    " Best jj is", bestjj)
+                        infoprint("\rSaving new best iteration...            ",end="\r", quiet=quiet)
+
+                        scalelow = scalelow_param
+                        scalehigh = scalehigh_param
+                        scale = scalehigh_param
+                        
+                        jj = bestjj
+                        rms[1] = bestrms
+                        pth[1] = bestpth
+                        fre[1] = bestfre
+                        f[1] = bestf.copy()
+                        tf[1] = besttf.copy()
+                        p = bestp.copy()
+                        tp = besttp.copy()
+                        ene[1] = bestene.copy()
+                        F[1] = bestF.copy()
+                        ORDER = bestorder.copy()
+                        ORDERC = bestorderc.copy()
+                        K = bestK.copy()
+                        X = bestX.copy()
+                        C = bestC.copy()
+                        tfC[1] = tfC.copy()
+                        L = bestL 
+                        rms[2] = delta(rms)
+                        pth[2] = delta(pth)
+                        fre[2] = delta(fre)
+
+                        winner = 'Y'
+                        if(mbar[1] == 0):
+                            needmbar = True
+                        #print("SAVED")
+                        savexyz(p,"best.xyz",mode='a')
+                        savexyz(p,"p.xyz",mode='w')
+
+                        s = np.argsort(besttp)
+                        bestp2 = bestp[s]
+                        Xcopy = X.copy()[s]
+                        tf2 ,f2,L2 = project(bestp2, Xcopy, exe=executor, procs=procs, eps=1e-14)
+
+                        np.savez("chk."+str(savej)+".npz", tf=tf2, f=f2, X=Xcopy, p=bestp2)
+                        savej += 1
+                        Xcopy = None
+
+                        if(savechk):
+                            try:
+                                os.remove(os.path.splitext(checkpoint)[0]+".mbar.pickle")
+                            except FileNotFoundError:
+                                pass
+                            try:
+                                np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                        E=ene[1], U=U, F=F[1],
+                                        tf=tf[1], f=f[1], tfC=tfC[1], fC=fC[1],
+                                        W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                        mbar_pickle=pickle.dumps(MBAR),
+                                        FORCE_SWITCH=FORCE_SWITCH,
+                                        use_ene_indices=use_ene_indices)
+                            except MemoryError:
+                                with open(os.path.splitext(checkpoint)[0]+".mbar.pickle",
+                                        'wb') as pfile:
+                                    pickle.dump(MBAR, pfile)
+                                if(os.path.exists(checkpoint)):
+                                    os.remove(checkpoint)
+                                np.savez(checkpoint, ORDER=ORDER, ORDERC=ORDERC, X=X, C=C, K=K, I=I,
+                                        E=ene[1], U=U, F=F[1],
+                                        tf=tf[1], f=f[1], tfC=tfC[1], fC=fC[1],
+                                        W=W,N=N,L=L,ii=ii-1,scale_list=scale_list, p=p, tp=tp, 
+                                        FORCE_SWITCH=FORCE_SWITCH,
+                                        use_ene_indices=use_ene_indices)
+                            except RecursionError:
+                                if not quiet:
+                                    print("RECURSION ERROR")
+                        
+                        #pathmem[memory_idx % memory][:] = p
+                        #pathmem_N += 1
+                        #memory_idx += 1
+                        #if(pathmem_N > memory):
+                        #    pathmem_N = memory
+                        #p = pathmem[:pathmem_N].mean(axis=0)
+                        
+                        rmsd[ii%memory] = np.abs(rms[2][0])
+                        converged = False
+                        if(np.abs(rms[2][0]) < eps):
+                            converged = True
+                        #elif((rmsd > 0).any()):
+                        #    if(np.abs(rmsd[rmsd > 0.0]).mean() < eps):
+                        #        converged = True
+                        doswap = True
+                        deadend = False
+                        drop_found = False
+                        if(converged):
+                            conv_ene = False if mbar[1] >= 0 else True
+                else:
+                    # winner is still ? so just bail
+                    #converged = True
+                    #deadend = True
+                    pass
+                #print(rms)
+                # 
+                if(converged):
+                    if not quiet:
+                        print("\rSpan {: 5.2f} Step {:4d} Search {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2e} L {: 10.8e} Time {:16s} {:s}".format(
+                                    w*100.,ii, jj, winner, scale_used, maxstep, L, timestr, 
+                                    "**** CONVERGED") ,end="\n")
+                        printinfoline("RMS", rms)
+                        printinfoline("PTH", pth)
+                        printinfoline("ENE*" if ene_updated else "ENE", fre)
+                        print()
+                        sys.stdout.flush()
+                    rmsd[:] = -1.0
+                    pathmem_N = 0
+                    if(conv_ene):
+                        break
+                    bestrms = [np.inf,np.inf,np.inf]
+                    bestpth = [np.inf,np.inf,np.inf]
+                    bestfre = [np.inf,np.inf,np.inf] 
+                else:
+                    if not quiet:
+                        print("\rSpan {: 5.2f} Step {:4d} Search {:4d} {:1s} Scale {: 10.8e} StepMax {: 4.2e} L {: 10.8e} Time {:16s}".format(
+                                    w*100.,ii, jj, winner, scale_used, maxstep, L, timestr) ,end="\n")
+                        printinfoline("RMS", rms)
+                        printinfoline("PTH", pth)
+                        printinfoline("ENE*" if ene_updated else "ENE", fre)
+                        print()
+                        sys.stdout.flush()
+
+                # rotate data to start new iter
+                dombar = False
+                if(converged and conv_ene and not quiet):
+                    print("Convergence achieved.")
+                    break
+                if(deadend and not drop_found and not force_mbar):
+                    if not quiet:
+                        if(jj > 1):
+                            print("Converged, but not at a minimum.")
+                        else:
+                            print("Convergence achieved.")
+                    break
+
+                # doswap means we want to compare to this new step (make current the ref)
+                if doswap:
+                    deadend = False
+                    drop_found = False
+                    jj = 0
+                    (rms,pth,f,tf,fC,tfC) = map(rotate, (rms,pth,f,tf,fC,tfC))
+                    (ene,F,fre) = map(rotate, (ene,F,fre))
+                
+
+
+            
+        if not quiet:
+            print("Best fit found using span =",beststep[0],"on step",beststep[1],", RMSD =",beststep[2])
+            print("Total elapsed: " + str(timedelta(seconds=tm-tottime)))
+        #s = np.argsort(besttf)
+        #bestf = bestf[s]
+        #X = X[s]
+        #s = np.argsort(besttp)
+        #bestp = bestp[s]
+        #bestp = clip(bestp)
+        tf ,f,L = project(bestp, X, exe=executor, procs=procs, eps=1e-14)
+        if(executor is not None):
+            executor.close()
+            executor.join()
+        return tf, f, X, bestp, L
+        return tf[1][ORDER], f[1][ORDER],X[ORDER]
+        return besttf[bestorder], bestf[bestorder],X[bestorder]
+        #return besttf[ORDER], bestf[ORDER], X[ORDER]
+        
+        pass
+
+    def _line_search(self):
+        pass
+
+    
+
 
